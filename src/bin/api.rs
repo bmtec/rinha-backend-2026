@@ -21,7 +21,6 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::collections::HashSet;
     use std::os::fd::RawFd;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -179,7 +178,7 @@ mod linux {
         ep.add(listener, LISTEN_TOKEN)
             .expect("epoll add uds listener");
 
-        let mut controls: HashSet<RawFd> = HashSet::new();
+        let mut controls: Vec<RawFd> = Vec::with_capacity(4);
         let mut conns = ConnTable::new(env_or("CONN_POOL_CAP", 512usize));
         let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; MAX_EVENTS];
         let wait = wait_tuning();
@@ -196,7 +195,7 @@ mod linux {
                             Io::Ok(fd) => {
                                 let fd = fd as RawFd;
                                 if ep.add(fd, fd as u64).is_ok() {
-                                    controls.insert(fd);
+                                    controls.push(fd);
                                 } else {
                                     net::close_fd(fd);
                                 }
@@ -208,10 +207,10 @@ mod linux {
                 }
 
                 let fd = ev.u64 as RawFd;
-                if controls.contains(&fd) {
+                if let Some(control_pos) = controls.iter().position(|&c| c == fd) {
                     if !drain_control(fd, &ep, &mut conns, index, nprobe) {
                         ep.del(fd);
-                        controls.remove(&fd);
+                        controls.swap_remove(control_pos);
                         net::close_fd(fd);
                     }
                     continue;
@@ -241,8 +240,6 @@ mod linux {
             match net::recv_fd(channel) {
                 RecvFd::Fd(fd) => {
                     net::set_nonblocking(fd).ok();
-                    net::set_tcp_nodelay(fd);
-                    net::set_quickack(fd);
                     if ep.add(fd, fd as u64).is_err() || !conns.insert(fd) {
                         net::close_fd(fd);
                         continue;
@@ -424,19 +421,25 @@ mod linux {
         events: &mut [libc::epoll_event],
         tuning: WaitTuning,
     ) -> std::io::Result<usize> {
+        if tuning.spin.is_zero() {
+            return if tuning.idle_us == 0 {
+                ep.wait(events, -1)
+            } else {
+                ep.wait_micros(events, tuning.idle_us)
+            };
+        }
+
         let mut n = ep.wait(events, 0)?;
         if n != 0 {
             return Ok(n);
         }
-        if !tuning.spin.is_zero() {
-            let start = Instant::now();
-            while start.elapsed() < tuning.spin {
-                n = ep.wait(events, 0)?;
-                if n != 0 {
-                    return Ok(n);
-                }
-                std::hint::spin_loop();
+        let start = Instant::now();
+        while start.elapsed() < tuning.spin {
+            n = ep.wait(events, 0)?;
+            if n != 0 {
+                return Ok(n);
             }
+            std::hint::spin_loop();
         }
         if tuning.idle_us == 0 {
             ep.wait(events, -1)
@@ -503,8 +506,15 @@ mod linux {
 
     /// Parses the Content-Length header value (case-insensitive key).
     fn content_length(headers: &[u8]) -> Option<usize> {
-        let pos = find_ci(headers, b"content-length:")?;
-        let mut i = pos + b"content-length:".len();
+        let (pos, len) = if let Some(pos) = memmem::find(headers, b"Content-Length:") {
+            (pos, b"Content-Length:".len())
+        } else if let Some(pos) = memmem::find(headers, b"content-length:") {
+            (pos, b"content-length:".len())
+        } else {
+            let pos = find_ci(headers, b"content-length:")?;
+            (pos, b"content-length:".len())
+        };
+        let mut i = pos + len;
         while i < headers.len() && (headers[i] == b' ' || headers[i] == b'\t') {
             i += 1;
         }

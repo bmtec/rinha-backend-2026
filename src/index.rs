@@ -23,14 +23,16 @@ pub const VERSION: u32 = 3; // v3: i16 quantized vectors + block bounds
 pub const HEADER_BYTES: usize = 20;
 pub const BLOCK_SIZE: usize = 128;
 
-/// Largest nprobe we will honour (bounds a stack buffer).
-const MAX_NPROBE: usize = 256;
-/// Largest centroid count we will honour (bounds a stack buffer; 4096 × i64
-/// = 32 KiB). The current index uses 2048 centroids; keeping this tight avoids
-/// clearing a cold 128 KiB stack buffer on every query.
-const MAX_CENTROIDS: usize = 4096;
-/// How many cell vectors to score per batch (bounds a stack scratch buffer).
-const SCAN_CHUNK: usize = 1024;
+/// Largest nprobe we will honour (bounds a stack buffer). The adaptive path
+/// expands to at most 48 cells, so 64 leaves room for manual tuning without
+/// paying for a cold 256-entry stack buffer on every request.
+const MAX_NPROBE: usize = 64;
+/// Largest centroid count we will honour. The baked index is built with 2048
+/// centroids.
+const MAX_CENTROIDS: usize = 2048;
+/// How many cell vectors to score per batch. Scans are block-oriented, so this
+/// only needs to match `BLOCK_SIZE`; a larger scratch array is just stack churn.
+const SCAN_CHUNK: usize = BLOCK_SIZE;
 /// Candidate buffer kept from the int16 scan, then re-ranked in exact f32.
 /// Must be ≥ K with enough margin to contain the true 5-NN despite int16
 /// ordering noise on near ties.
