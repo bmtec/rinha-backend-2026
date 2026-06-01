@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.05", memory: "16MB" }
+        limits: { cpus: "0.01", memory: "8MB" }
 
   api1:
     image: ghcr.io/bmtec/rinha-backend-2026:latest
@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.475", memory: "167MB" }
+        limits: { cpus: "0.495", memory: "171MB" }
 
   api2:
     image: ghcr.io/bmtec/rinha-backend-2026:latest
@@ -74,7 +74,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.475", memory: "167MB" }
+        limits: { cpus: "0.495", memory: "171MB" }
 
 networks:
   rinha:
