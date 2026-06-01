@@ -1,0 +1,47 @@
+[package]
+name = "rinha-2026"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "Rinha de Backend 2026 — fraud detection API (fd-passing LB + epoll)"
+
+[lib]
+name = "rinha"
+path = "src/lib.rs"
+
+[[bin]]
+name = "api"
+path = "src/bin/api.rs"
+
+[[bin]]
+name = "lb"
+path = "src/bin/lb.rs"
+
+[[bin]]
+name = "builder"
+path = "src/bin/builder.rs"
+
+[dependencies]
+# Low-level Linux syscalls: epoll, SCM_RIGHTS fd-passing, sockets, mlock.
+libc = "0.2"
+# Memory-mapped index (read-only).
+memmap2 = "0.9"
+# SIMD byte search for the hand-rolled JSON parser.
+memchr = "2"
+
+# Builder-only (offline). The api/lb binaries never reference these; lto+strip
+# removes them from those binaries.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.package."*"]
+opt-level = 3

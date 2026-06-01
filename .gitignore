@@ -1,0 +1,32 @@
+# Claude / AI assistant artifacts
+CLAUDE.md
+.claude/
+.claudesync/
+CLAUDE.local.md
+**/CLAUDE.md
+.mcp.json
+.cursor/
+.aider*
+.anthropic/
+
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Build / index artifacts
+/output/
+*.bin
+
+# Local env / results
+.env
+results.json
+*.swp
+
+# Large data fetched from the official challenge repo (not committed; see
+# test/README.md). resources/references.json.gz is committed because the
+# Docker build needs it to create /data/index.bin.
+test/test-data.json
+
+# OS
+.DS_Store

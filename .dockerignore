@@ -1,0 +1,6 @@
+.git
+target
+test/test-data.json
+test/results.json
+.DS_Store
+rinha-backend-2026
