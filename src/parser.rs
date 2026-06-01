@@ -78,25 +78,10 @@ fn value_start(b: &[u8], key: &[u8]) -> Option<usize> {
     memmem::find(b, key).map(|p| p + key.len())
 }
 
-#[inline]
-fn eat(b: &[u8], i: &mut usize, token: &[u8]) -> Option<()> {
-    if b.get(*i..)?.starts_with(token) {
-        *i += token.len();
-        Some(())
-    } else {
-        None
-    }
-}
-
 /// Parses a JSON number (optionally signed, no exponent) starting at `i`.
 /// Returns the parsed value. Whitespace before the number is skipped.
 #[inline]
 fn parse_f32(b: &[u8], i: usize) -> Option<f32> {
-    parse_f32_end(b, i).map(|(v, _)| v)
-}
-
-#[inline]
-fn parse_f32_end(b: &[u8], i: usize) -> Option<(f32, usize)> {
     let mut i = skip_ws(b, i);
     let start = i;
     let mut neg = false;
@@ -128,17 +113,12 @@ fn parse_f32_end(b: &[u8], i: usize) -> Option<(f32, usize)> {
         let _ = start;
         return None;
     }
-    Some((if neg { -value } else { value }, i))
+    Some(if neg { -value } else { value })
 }
 
 /// Parses an unsigned integer starting at `i` (whitespace skipped first).
 #[inline]
 fn parse_u32(b: &[u8], i: usize) -> Option<u32> {
-    parse_u32_end(b, i).map(|(v, _)| v)
-}
-
-#[inline]
-fn parse_u32_end(b: &[u8], i: usize) -> Option<(u32, usize)> {
     let mut i = skip_ws(b, i);
     let mut v: u32 = 0;
     let mut saw = false;
@@ -148,7 +128,7 @@ fn parse_u32_end(b: &[u8], i: usize) -> Option<(u32, usize)> {
         saw = true;
     }
     if saw {
-        Some((v, i))
+        Some(v)
     } else {
         None
     }
@@ -184,140 +164,6 @@ fn parse_string<'a>(b: &'a [u8], i: usize) -> Option<(&'a [u8], usize)> {
 /// Parse the request body into a [`TransactionPayload`]. Returns `None` on any
 /// malformed input; the caller falls back to the safe default response.
 pub fn parse(buf: &[u8]) -> Option<TransactionPayload<'_>> {
-    if let Some(p) = parse_compact_ordered(buf) {
-        return Some(p);
-    }
-    parse_fallback(buf)
-}
-
-#[inline]
-fn parse_compact_ordered(buf: &[u8]) -> Option<TransactionPayload<'_>> {
-    let mut i = 0usize;
-    eat(buf, &mut i, b"{\"id\":\"")?;
-    i += memchr::memchr(b'"', &buf[i..])? + 1;
-
-    eat(buf, &mut i, b",\"transaction\":{\"amount\":")?;
-    let (amount, next) = parse_f32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"installments\":")?;
-    let (installments, next) = parse_u32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"requested_at\":\"")?;
-    let requested_at = copy20(buf.get(i..i + 20)?)?;
-    i += 20;
-    eat(buf, &mut i, b"\"}")?;
-
-    eat(buf, &mut i, b",\"customer\":{\"avg_amount\":")?;
-    let (avg_amount, next) = parse_f32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"tx_count_24h\":")?;
-    let (tx_count_24h, next) = parse_u32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"known_merchants\":")?;
-    let (known_merchants, known_merchants_len, next) = parse_compact_string_array(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b"}")?;
-
-    eat(buf, &mut i, b",\"merchant\":{\"id\":\"")?;
-    let merch_start = i;
-    i += memchr::memchr(b'"', &buf[i..])?;
-    let merchant_id = &buf[merch_start..i];
-    eat(buf, &mut i, b"\",\"mcc\":\"")?;
-    let mcc = copy4(buf.get(i..i + 4)?)?;
-    i += 4;
-    eat(buf, &mut i, b"\",\"avg_amount\":")?;
-    let (merchant_avg_amount, next) = parse_f32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b"}")?;
-
-    eat(buf, &mut i, b",\"terminal\":{\"is_online\":")?;
-    let (is_online, next) = parse_bool_compact(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"card_present\":")?;
-    let (card_present, next) = parse_bool_compact(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b",\"km_from_home\":")?;
-    let (km_from_home, next) = parse_f32_end(buf, i)?;
-    i = next;
-    eat(buf, &mut i, b"}")?;
-
-    eat(buf, &mut i, b",\"last_transaction\":")?;
-    let (has_last_transaction, last_tx_timestamp, km_from_current) =
-        if buf.get(i..)?.starts_with(b"null}") {
-            (false, None, None)
-        } else {
-            eat(buf, &mut i, b"{\"timestamp\":\"")?;
-            let ts = copy20(buf.get(i..i + 20)?)?;
-            i += 20;
-            eat(buf, &mut i, b"\",\"km_from_current\":")?;
-            let (km, next) = parse_f32_end(buf, i)?;
-            i = next;
-            eat(buf, &mut i, b"}}")?;
-            (true, Some(ts), Some(km))
-        };
-
-    Some(TransactionPayload {
-        amount,
-        installments,
-        requested_at,
-        avg_amount,
-        tx_count_24h,
-        known_merchants,
-        known_merchants_len,
-        merchant_id,
-        mcc,
-        merchant_avg_amount,
-        is_online,
-        card_present,
-        km_from_home,
-        has_last_transaction,
-        last_tx_timestamp,
-        km_from_current,
-    })
-}
-
-#[inline]
-fn parse_bool_compact(b: &[u8], i: usize) -> Option<(bool, usize)> {
-    if b.get(i..)?.starts_with(b"true") {
-        Some((true, i + 4))
-    } else if b.get(i..)?.starts_with(b"false") {
-        Some((false, i + 5))
-    } else {
-        None
-    }
-}
-
-#[inline]
-fn parse_compact_string_array<'a>(
-    b: &'a [u8],
-    mut i: usize,
-) -> Option<([&'a [u8]; MAX_MERCHANTS], usize, usize)> {
-    if b.get(i)? != &b'[' {
-        return None;
-    }
-    i += 1;
-    let mut out: [&[u8]; MAX_MERCHANTS] = [b""; MAX_MERCHANTS];
-    let mut n = 0usize;
-    loop {
-        match *b.get(i)? {
-            b']' => return Some((out, n, i + 1)),
-            b',' => i += 1,
-            b'"' => {
-                i += 1;
-                let start = i;
-                i += memchr::memchr(b'"', &b[i..])?;
-                if n < MAX_MERCHANTS {
-                    out[n] = &b[start..i];
-                    n += 1;
-                }
-                i += 1;
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn parse_fallback(buf: &[u8]) -> Option<TransactionPayload<'_>> {
     // Locate each object anchor so duplicated keys resolve unambiguously.
     let tx = memmem::find(buf, b"\"transaction\":")?;
     let cust = memmem::find(buf, b"\"customer\":")?;
