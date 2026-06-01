@@ -4,10 +4,10 @@
 //! them, and defines the constants that are fixed by the challenge spec.
 
 pub mod distance;
-pub mod vectorizer;
 pub mod index;
 pub mod parser;
 pub mod responses;
+pub mod vectorizer;
 
 // Low-level networking (epoll, SCM_RIGHTS) is Linux-only.
 #[cfg(target_os = "linux")]

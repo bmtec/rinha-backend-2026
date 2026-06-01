@@ -27,22 +27,22 @@ pub const MAX_MERCHANTS: usize = 16;
 /// A parsed fraud-score request. All slices borrow from the input buffer.
 #[derive(Debug)]
 pub struct TransactionPayload<'a> {
-    pub amount: f64,
+    pub amount: f32,
     pub installments: u32,
     pub requested_at: [u8; 20],
-    pub avg_amount: f64,
+    pub avg_amount: f32,
     pub tx_count_24h: u32,
     pub known_merchants: [&'a [u8]; MAX_MERCHANTS],
     pub known_merchants_len: usize,
     pub merchant_id: &'a [u8],
     pub mcc: [u8; 4],
-    pub merchant_avg_amount: f64,
+    pub merchant_avg_amount: f32,
     pub is_online: bool,
     pub card_present: bool,
-    pub km_from_home: f64,
+    pub km_from_home: f32,
     pub has_last_transaction: bool,
     pub last_tx_timestamp: Option<[u8; 20]>,
-    pub km_from_current: Option<f64>,
+    pub km_from_current: Option<f32>,
 }
 
 impl<'a> TransactionPayload<'a> {
@@ -81,7 +81,7 @@ fn value_start(b: &[u8], key: &[u8]) -> Option<usize> {
 /// Parses a JSON number (optionally signed, no exponent) starting at `i`.
 /// Returns the parsed value. Whitespace before the number is skipped.
 #[inline]
-fn parse_f64(b: &[u8], i: usize) -> Option<f64> {
+fn parse_f32(b: &[u8], i: usize) -> Option<f32> {
     let mut i = skip_ws(b, i);
     let start = i;
     let mut neg = false;
@@ -89,20 +89,20 @@ fn parse_f64(b: &[u8], i: usize) -> Option<f64> {
         neg = true;
         i += 1;
     }
-    let mut int_part: f64 = 0.0;
+    let mut int_part: f32 = 0.0;
     let mut saw_digit = false;
     while i < b.len() && b[i].is_ascii_digit() {
-        int_part = int_part * 10.0 + (b[i] - b'0') as f64;
+        int_part = int_part * 10.0 + (b[i] - b'0') as f32;
         i += 1;
         saw_digit = true;
     }
     let mut value = int_part;
     if i < b.len() && b[i] == b'.' {
         i += 1;
-        let mut frac: f64 = 0.0;
-        let mut scale: f64 = 1.0;
+        let mut frac: f32 = 0.0;
+        let mut scale: f32 = 1.0;
         while i < b.len() && b[i].is_ascii_digit() {
-            frac = frac * 10.0 + (b[i] - b'0') as f64;
+            frac = frac * 10.0 + (b[i] - b'0') as f32;
             scale *= 10.0;
             i += 1;
             saw_digit = true;
@@ -172,7 +172,7 @@ pub fn parse(buf: &[u8]) -> Option<TransactionPayload<'_>> {
     let last = memmem::find(buf, b"\"last_transaction\":")?;
 
     // --- transaction ---
-    let amount = parse_f64(buf, value_start(&buf[tx..], b"\"amount\":")? + tx)?;
+    let amount = parse_f32(buf, value_start(&buf[tx..], b"\"amount\":")? + tx)?;
     let installments = parse_u32(buf, value_start(&buf[tx..], b"\"installments\":")? + tx)?;
     let requested_at = {
         let p = value_start(&buf[tx..], b"\"requested_at\":")? + tx;
@@ -181,7 +181,7 @@ pub fn parse(buf: &[u8]) -> Option<TransactionPayload<'_>> {
     };
 
     // --- customer ---
-    let avg_amount = parse_f64(buf, value_start(&buf[cust..], b"\"avg_amount\":")? + cust)?;
+    let avg_amount = parse_f32(buf, value_start(&buf[cust..], b"\"avg_amount\":")? + cust)?;
     let tx_count_24h = parse_u32(buf, value_start(&buf[cust..], b"\"tx_count_24h\":")? + cust)?;
 
     let (known_merchants, known_merchants_len) = {
@@ -200,12 +200,12 @@ pub fn parse(buf: &[u8]) -> Option<TransactionPayload<'_>> {
         copy4(s)?
     };
     let merchant_avg_amount =
-        parse_f64(buf, value_start(&buf[merch..], b"\"avg_amount\":")? + merch)?;
+        parse_f32(buf, value_start(&buf[merch..], b"\"avg_amount\":")? + merch)?;
 
     // --- terminal ---
     let is_online = parse_bool(buf, value_start(&buf[term..], b"\"is_online\":")? + term)?;
     let card_present = parse_bool(buf, value_start(&buf[term..], b"\"card_present\":")? + term)?;
-    let km_from_home = parse_f64(buf, value_start(&buf[term..], b"\"km_from_home\":")? + term)?;
+    let km_from_home = parse_f32(buf, value_start(&buf[term..], b"\"km_from_home\":")? + term)?;
 
     // --- last_transaction (may be null) ---
     let last_val = skip_ws(buf, last + "\"last_transaction\":".len());
@@ -218,7 +218,10 @@ pub fn parse(buf: &[u8]) -> Option<TransactionPayload<'_>> {
                 let (s, _) = parse_string(buf, p)?;
                 copy20(s)?
             };
-            let km = parse_f64(buf, value_start(&buf[last..], b"\"km_from_current\":")? + last)?;
+            let km = parse_f32(
+                buf,
+                value_start(&buf[last..], b"\"km_from_current\":")? + last,
+            )?;
             (true, Some(ts), Some(km))
         };
 

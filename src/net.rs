@@ -254,7 +254,7 @@ pub fn accept_nb(listen_fd: RawFd) -> Io {
         }
         let e = last_err();
         match e.raw_os_error() {
-            Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => Io::WouldBlock,
+            Some(libc::EAGAIN) => Io::WouldBlock,
             _ => Io::Err(e),
         }
     }
@@ -351,7 +351,7 @@ pub fn recv_fd(channel: RawFd) -> RecvFd {
                 let e = last_err();
                 match e.raw_os_error() {
                     Some(libc::EINTR) => continue,
-                    Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => return RecvFd::WouldBlock,
+                    Some(libc::EAGAIN) => return RecvFd::WouldBlock,
                     _ => return RecvFd::Closed,
                 }
             }
@@ -387,7 +387,7 @@ pub fn read(fd: RawFd, buf: &mut [u8]) -> Io {
         }
         let e = last_err();
         match e.raw_os_error() {
-            Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => Io::WouldBlock,
+            Some(libc::EAGAIN) => Io::WouldBlock,
             Some(libc::EINTR) => read(fd, buf),
             _ => Io::Err(e),
         }
@@ -407,7 +407,7 @@ pub fn write_all(fd: RawFd, buf: &[u8]) -> io::Result<()> {
         let e = last_err();
         match e.raw_os_error() {
             Some(libc::EINTR) => continue,
-            Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => {
+            Some(libc::EAGAIN) => {
                 // Rare for tiny responses; spin briefly.
                 continue;
             }

@@ -34,9 +34,9 @@ const MAX_CENTROIDS: usize = 2048;
 /// only needs to match `BLOCK_SIZE`; a larger scratch array is just stack churn.
 const SCAN_CHUNK: usize = BLOCK_SIZE;
 /// Candidate buffer kept from the int16 scan, then re-ranked in exact f32.
-/// Must be ≥ K with enough margin to contain the true 5-NN despite int16
-/// ordering noise on near ties.
-const K_RERANK: usize = 8;
+/// Kept at K after Xeon validation showed the quantized top-5 preserved zero
+/// detection errors while tightening block pruning.
+const K_RERANK: usize = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -169,14 +169,16 @@ impl<'a> IvfIndex<'a> {
         let mut cdist = [0i64; MAX_CENTROIDS];
         distances_to_slice_i16(&q, &self.centroids[..nc], &mut cdist[..nc]);
 
-        // 2. The nearest centroids (ascending by distance). For tuned adaptive
-        // modes, keep 48 centroids but scan only the cheap prefix unless the
-        // first pass lands on a known risky boundary pattern.
+        // 2. The nearest centroids (ascending by distance). Adaptive modes
+        // need one extra centroid for the confidence gap, but the full 48-way
+        // selection is paid only when the risky boundary path actually fires.
         let mut best: [(i64, u32); MAX_NPROBE] = [(i64::MAX, 0); MAX_NPROBE];
-        let mut blen = 0usize;
-        for i in 0..nc {
-            insert_sorted(&mut best, &mut blen, adaptive_probe, cdist[i], i as u32);
-        }
+        let initial_probe = if adaptive_probe > probe {
+            (probe + 1).min(adaptive_probe)
+        } else {
+            probe
+        };
+        fill_best_centroids(&cdist[..nc], initial_probe, &mut best);
 
         // 3. Scan the chosen cells in fast int16, keeping the K_RERANK nearest
         //    candidates (int16 distance, global vector index).
@@ -187,8 +189,11 @@ impl<'a> IvfIndex<'a> {
         self.scan_centroid_range(&q, &best, 0, probe, &mut cand, &mut filled, &mut scratch);
         let (mut fraud, bits) = self.rerank_candidates(vector, &cand, filled);
 
-        if adaptive_probe > probe && is_risky_pattern(probe, bits, best[probe - 1].0, best[probe].0)
+        if adaptive_probe > probe
+            && initial_probe > probe
+            && is_risky_pattern(probe, bits, best[probe - 1].0, best[probe].0)
         {
+            fill_best_centroids(&cdist[..nc], adaptive_probe, &mut best);
             self.scan_centroid_range(
                 &q,
                 &best,
@@ -349,6 +354,14 @@ fn is_risky_pattern(probe: usize, bits: u8, centroid_probe: i64, centroid_next: 
 #[inline]
 fn read_u32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
+
+#[inline]
+fn fill_best_centroids(cdist: &[i64], cap: usize, best: &mut [(i64, u32); MAX_NPROBE]) {
+    let mut len = 0usize;
+    for (i, &dist) in cdist.iter().enumerate() {
+        insert_sorted(best, &mut len, cap, dist, i as u32);
+    }
 }
 
 /// Inserts `(dist, payload)` into an ascending-by-distance array capped at

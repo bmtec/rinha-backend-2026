@@ -17,26 +17,26 @@ pub const BODIES: [&[u8]; 6] = [
 pub const FALLBACK_BODY: &[u8] = br#"{"approved":true,"fraud_score":0.0}"#;
 
 /// Complete HTTP/1.1 responses (status line + headers + body) for each
-/// fraud_count, with a pre-computed Content-Length and keep-alive.
+/// fraud_count, with a pre-computed Content-Length. HTTP/1.1 keeps connections
+/// alive by default, so we omit `Connection: keep-alive` and `Content-Type` to
+/// minimize the hot write.
 pub const RESPONSES: [&[u8]; 6] = [
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\nConnection: keep-alive\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}",
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\nConnection: keep-alive\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}",
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\nConnection: keep-alive\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}",
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\nConnection: keep-alive\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}",
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\nConnection: keep-alive\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}",
-    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\nConnection: keep-alive\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}",
+    b"HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}",
 ];
 
 /// The complete fallback HTTP response (== `RESPONSES[0]`).
 pub const FALLBACK_RESPONSE: &[u8] = RESPONSES[0];
 
-/// `GET /ready` → 200 with empty body, keep-alive.
-pub const READY_RESPONSE: &[u8] =
-    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+/// `GET /ready` → 200 with empty body.
+pub const READY_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length:0\r\n\r\n";
 
-/// Unknown route → 404, keep-alive.
-pub const NOTFOUND_RESPONSE: &[u8] =
-    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+/// Unknown route → 404.
+pub const NOTFOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\nContent-Length:0\r\n\r\n";
 
 /// Returns the JSON body for a given fraud_count, falling back for any value
 /// outside 0..=5.
@@ -81,7 +81,7 @@ mod tests {
             // The response must end with exactly its body.
             assert!(resp.ends_with(body), "response {c} body mismatch");
             // And the declared Content-Length must equal the body length.
-            let needle = format!("Content-Length: {}\r\n", body.len());
+            let needle = format!("Content-Length:{}\r\n", body.len());
             let hay = std::str::from_utf8(resp).unwrap();
             assert!(hay.contains(&needle), "response {c} wrong content-length");
         }
