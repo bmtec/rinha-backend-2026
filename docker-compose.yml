@@ -48,7 +48,7 @@ services:
     environment:
       API_SOCKET: "/sockets/api1.sock"
       INDEX_PATH: "/data/index.bin"
-      NPROBE: "10"
+      NPROBE: "8"
       CONN_POOL_CAP: "512"
       EPOLL_SPIN_US: "15"
       EPOLL_IDLE_US: "80"
@@ -78,7 +78,7 @@ services:
     environment:
       API_SOCKET: "/sockets/api2.sock"
       INDEX_PATH: "/data/index.bin"
-      NPROBE: "10"
+      NPROBE: "8"
       CONN_POOL_CAP: "512"
       EPOLL_SPIN_US: "15"
       EPOLL_IDLE_US: "80"

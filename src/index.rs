@@ -15,7 +15,7 @@
 //! [Labels]       num_vectors  × u8        (0 = legit, 1 = fraud)
 //! ```
 
-use crate::distance::{distances_to_slice_i16, quantize_i16, SCALE};
+use crate::distance::{distances_to_slice_i16, quantize_i16, squared_euclidean_i16, SCALE};
 use crate::K;
 
 pub const MAGIC: u32 = 0x52494E48; // "RINH"
@@ -159,7 +159,7 @@ impl<'a> IvfIndex<'a> {
         let q = quantize_i16(vector);
         let nc = self.num_centroids.min(MAX_CENTROIDS);
         let probe = nprobe.clamp(1, MAX_NPROBE).min(nc);
-        let adaptive_probe = if probe == 10 || probe == 12 {
+        let adaptive_probe = if probe == 8 || probe == 9 || probe == 10 || probe == 12 {
             48.min(nc)
         } else {
             probe
@@ -184,9 +184,8 @@ impl<'a> IvfIndex<'a> {
         //    candidates (int16 distance, global vector index).
         let mut cand: [(i64, u32); K_RERANK] = [(i64::MAX, 0); K_RERANK];
         let mut filled = 0usize;
-        let mut scratch = [0i64; SCAN_CHUNK];
 
-        self.scan_centroid_range(&q, &best, 0, probe, &mut cand, &mut filled, &mut scratch);
+        self.scan_centroid_range(&q, &best, 0, probe, &mut cand, &mut filled);
         let (mut fraud, bits) = self.rerank_candidates(vector, &cand, filled);
 
         if adaptive_probe > probe
@@ -194,15 +193,7 @@ impl<'a> IvfIndex<'a> {
             && is_risky_pattern(probe, bits, best[probe - 1].0, best[probe].0)
         {
             fill_best_centroids(&cdist[..nc], adaptive_probe, &mut best);
-            self.scan_centroid_range(
-                &q,
-                &best,
-                probe,
-                adaptive_probe,
-                &mut cand,
-                &mut filled,
-                &mut scratch,
-            );
+            self.scan_centroid_range(&q, &best, probe, adaptive_probe, &mut cand, &mut filled);
             fraud = self.rerank_candidates(vector, &cand, filled).0;
         }
 
@@ -218,7 +209,6 @@ impl<'a> IvfIndex<'a> {
         to: usize,
         cand: &mut [(i64, u32); K_RERANK],
         filled: &mut usize,
-        scratch: &mut [i64; SCAN_CHUNK],
     ) {
         for b in from..to {
             let cell = self.cells[best[b].1 as usize];
@@ -252,9 +242,8 @@ impl<'a> IvfIndex<'a> {
 
                 let off = start + local_off;
                 let cell_vecs = &self.vectors[off..off + n];
-                distances_to_slice_i16(q, cell_vecs, &mut scratch[..n]);
-                for j in 0..n {
-                    let d = scratch[j];
+                for (j, vec) in cell_vecs.iter().enumerate() {
+                    let d = squared_euclidean_i16(q, vec);
                     if *filled < K_RERANK || d < cand[K_RERANK - 1].0 {
                         insert_cand(cand, filled, d, (off + j) as u32);
                     }
@@ -323,6 +312,11 @@ fn lower_bound_block(q: &[i16; 16], block: &BlockBounds, limit: i64) -> i64 {
 #[inline]
 fn is_risky_pattern(probe: usize, bits: u8, centroid_probe: i64, centroid_next: i64) -> bool {
     let centroid_gap = centroid_next - centroid_probe;
+    if probe == 8 || probe == 9 {
+        let frauds = bits.count_ones();
+        return frauds > 0 && frauds < K as u32;
+    }
+
     if probe == 10 {
         return match bits {
             0b00110 => centroid_gap <= 500_000,
