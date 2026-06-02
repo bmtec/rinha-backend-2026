@@ -193,38 +193,37 @@ mod tests {
 
     #[test]
     fn day_of_week_known_dates() {
-        // 2000-01-01 was a Saturday → Monday=0 mapping gives 5.
+        // 2000-01-01 was a Saturday; Monday=0 mapping gives 5.
         assert_eq!(
             ParsedTs::from_iso(b"2000-01-01T00:00:00Z").weekday_mon0(),
             5
         );
-        // 2026-03-11 is a Wednesday → 2.
+        // 2026-01-05 was a Monday; Monday=0 mapping gives 0.
         assert_eq!(
-            ParsedTs::from_iso(b"2026-03-11T00:00:00Z").weekday_mon0(),
-            2
+            ParsedTs::from_iso(b"2026-01-05T00:00:00Z").weekday_mon0(),
+            0
         );
     }
 
     #[test]
     fn hour_extraction() {
-        assert_eq!(ParsedTs::from_iso(b"2026-03-11T18:45:53Z").hour, 18);
-        assert_eq!(ParsedTs::from_iso(b"2026-03-11T03:00:00Z").hour, 3);
+        assert_eq!(ParsedTs::from_iso(b"2026-01-05T09:10:11Z").hour, 9);
+        assert_eq!(ParsedTs::from_iso(b"2026-01-05T03:00:00Z").hour, 3);
     }
 
     #[test]
     fn minutes_diff_same_day() {
-        // 18:45 - 14:58 = 3h47m = 227 minutes.
-        let a = *b"2026-03-11T18:45:53Z";
-        let b = *b"2026-03-11T14:58:35Z";
+        let a = *b"2026-02-06T16:40:30Z";
+        let b = *b"2026-02-06T15:10:10Z";
         assert_eq!(
             minutes_diff(ParsedTs::from_iso(&a), ParsedTs::from_iso(&b)),
-            227
+            90
         );
     }
 
     #[test]
     fn null_last_transaction_yields_sentinels() {
-        const NULL_LAST: &[u8] = br#"{"id":"t","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["MERC-016"]},"merchant":{"id":"MERC-016","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}"#;
+        const NULL_LAST: &[u8] = br#"{"id":"unit-null-last","transaction":{"amount":100.0,"installments":2,"requested_at":"2026-01-05T09:10:11Z"},"customer":{"avg_amount":200.0,"tx_count_24h":3,"known_merchants":["MERCHANT-B"]},"merchant":{"id":"MERCHANT-B","mcc":"5411","avg_amount":60.0},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.0},"last_transaction":null}"#;
         let p = parse(NULL_LAST).unwrap();
         let v = vectorize(&p);
         assert_eq!(v[5], -1.0);
@@ -239,7 +238,7 @@ mod tests {
 
     #[test]
     fn quantized_output_matches_standalone_quantization() {
-        const WITH_LAST: &[u8] = br#"{"id":"t","transaction":{"amount":384.88,"installments":3,"requested_at":"2026-03-11T20:23:35Z"},"customer":{"avg_amount":769.76,"tx_count_24h":3,"known_merchants":["MERC-009","MERC-001"]},"merchant":{"id":"MERC-001","mcc":"5912","avg_amount":298.95},"terminal":{"is_online":false,"card_present":true,"km_from_home":13.7090520965},"last_transaction":{"timestamp":"2026-03-11T14:58:35Z","km_from_current":18.8626479774}}"#;
+        const WITH_LAST: &[u8] = br#"{"id":"unit-with-last","transaction":{"amount":345.0,"installments":6,"requested_at":"2026-02-06T16:40:30Z"},"customer":{"avg_amount":456.0,"tx_count_24h":5,"known_merchants":["MERCHANT-D"]},"merchant":{"id":"MERCHANT-D","mcc":"5912","avg_amount":210.0},"terminal":{"is_online":false,"card_present":true,"km_from_home":22.0},"last_transaction":{"timestamp":"2026-02-06T15:10:10Z","km_from_current":33.0}}"#;
         let p = parse(WITH_LAST).unwrap();
         let (v, q) = vectorize_quantized(&p);
         assert_eq!(q, quantize_i16(&v));
@@ -247,7 +246,7 @@ mod tests {
 
     #[test]
     fn dimensions_are_clamped() {
-        const BIG: &[u8] = br#"{"id":"t","transaction":{"amount":999999.0,"installments":99,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":1.0,"tx_count_24h":999,"known_merchants":["MERC-001"]},"merchant":{"id":"MERC-016","mcc":"7995","avg_amount":999999.0},"terminal":{"is_online":true,"card_present":false,"km_from_home":99999.0},"last_transaction":null}"#;
+        const BIG: &[u8] = br#"{"id":"unit-clamp","transaction":{"amount":999999.0,"installments":99,"requested_at":"2026-04-07T12:00:00Z"},"customer":{"avg_amount":1.0,"tx_count_24h":999,"known_merchants":["MERCHANT-A"]},"merchant":{"id":"MERCHANT-Z","mcc":"7995","avg_amount":999999.0},"terminal":{"is_online":true,"card_present":false,"km_from_home":99999.0},"last_transaction":null}"#;
         let p = parse(BIG).unwrap();
         let v = vectorize(&p);
         assert_eq!(v[0], 1.0);
@@ -255,7 +254,7 @@ mod tests {
         assert_eq!(v[2], 1.0);
         assert_eq!(v[7], 1.0);
         assert_eq!(v[8], 1.0);
-        assert_eq!(v[11], 1.0); // MERC-016 not in [MERC-001]
+        assert_eq!(v[11], 1.0);
         assert!((v[12] - 0.85).abs() < 1e-6); // mcc 7995
     }
 }

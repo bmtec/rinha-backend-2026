@@ -27,6 +27,7 @@ results.json
 # test/README.md). resources/references.json.gz is committed because the
 # Docker build needs it to create /data/index.bin.
 test/test-data.json
+resources/example-payloads.json
 
 # OS
 .DS_Store
