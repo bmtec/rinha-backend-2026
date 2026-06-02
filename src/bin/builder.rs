@@ -17,7 +17,7 @@ use rand::{RngCore, SeedableRng};
 use serde::Deserialize;
 
 use rinha::distance::quantize_i16;
-use rinha::index::{BLOCK_SIZE, MAGIC, VERSION};
+use rinha::index::{align_up, BLOCK_SIZE, MAGIC, VERSION};
 
 const DEFAULT_NUM_CENTROIDS: usize = 2048;
 const KMEANS_ITERS: usize = 15;
@@ -219,10 +219,16 @@ fn write_index(
 
     let mut block_starts = vec![0u32; centroids.len()];
     let mut block_counts = vec![0u32; centroids.len()];
+    let mut cell_bounds: Vec<([i16; 16], [i16; 16])> = Vec::with_capacity(centroids.len());
     let mut block_bounds: Vec<([i16; 16], [i16; 16])> = Vec::new();
     for c in 0..centroids.len() {
         let start = starts[c] as usize;
         let count = counts[c] as usize;
+        cell_bounds.push(if count == 0 {
+            ([0i16; 16], [0i16; 16])
+        } else {
+            bounds_i16(&qvectors[start..start + count])
+        });
         block_starts[c] = block_bounds.len() as u32;
         let blocks = count.div_ceil(BLOCK_SIZE);
         block_counts[c] = blocks as u32;
@@ -234,17 +240,21 @@ fn write_index(
     }
 
     // Header.
+    let mut pos = 0usize;
     w.write_all(&MAGIC.to_le_bytes()).unwrap();
     w.write_all(&VERSION.to_le_bytes()).unwrap();
     w.write_all(&(vectors.len() as u32).to_le_bytes()).unwrap();
     w.write_all(&(centroids.len() as u32).to_le_bytes())
         .unwrap();
     w.write_all(&16u32.to_le_bytes()).unwrap();
+    pos += 20;
+    pad_to_align(&mut w, &mut pos, 32);
 
     // Centroids (quantized to i16).
     for c in &qcentroids {
         write_vec_i16(&mut w, c);
     }
+    pos += qcentroids.len() * 32;
     // Cell offsets + block ranges.
     for i in 0..centroids.len() {
         w.write_all(&starts[i].to_le_bytes()).unwrap();
@@ -252,11 +262,22 @@ fn write_index(
         w.write_all(&block_starts[i].to_le_bytes()).unwrap();
         w.write_all(&block_counts[i].to_le_bytes()).unwrap();
     }
+    pos += centroids.len() * 16;
+    pad_to_align(&mut w, &mut pos, 32);
+    // Cell lower-bound boxes.
+    for (min, max) in &cell_bounds {
+        write_vec_i16(&mut w, min);
+        write_vec_i16(&mut w, max);
+    }
+    pos += cell_bounds.len() * 64;
+    pad_to_align(&mut w, &mut pos, 32);
     // Block lower-bound boxes.
     for (min, max) in &block_bounds {
         write_vec_i16(&mut w, min);
         write_vec_i16(&mut w, max);
     }
+    pos += block_bounds.len() * 64;
+    pad_to_align(&mut w, &mut pos, 32);
     // Vectors (quantized to i16).
     for v in &qvectors {
         write_vec_i16(&mut w, v);
@@ -311,4 +332,15 @@ fn write_vec_i16<W: Write>(w: &mut W, v: &[i16; 16]) {
         buf[i * 2..i * 2 + 2].copy_from_slice(&x.to_le_bytes());
     }
     w.write_all(&buf).unwrap();
+}
+
+fn pad_to_align<W: Write>(w: &mut W, pos: &mut usize, align: usize) {
+    let next = align_up(*pos, align);
+    if next == *pos {
+        return;
+    }
+    let pad = next - *pos;
+    const ZEROES: [u8; 32] = [0; 32];
+    w.write_all(&ZEROES[..pad]).unwrap();
+    *pos = next;
 }

@@ -28,6 +28,8 @@ fn main() {
     let port: u16 = env_or("LB_PORT", 9999);
     let backlog: i32 = env_or("LB_BACKLOG", 65535);
     let accept_batch: usize = env_or("LB_ACCEPT_BATCH", 64);
+    let set_nodelay = env_or("LB_SET_NODELAY", 1u32) != 0;
+    let set_quickack = env_or("LB_SET_QUICKACK", 1u32) != 0;
     let sockets: Vec<PathBuf> = env::var("API_SOCKETS")
         .unwrap_or_else(|_| "/sockets/api1.sock,/sockets/api2.sock".to_string())
         .split(',')
@@ -36,13 +38,15 @@ fn main() {
 
     let listener = net::tcp_listener_opts(port, backlog, true).expect("bind :9999");
     net::set_nonblocking(listener).ok();
-    net::set_tcp_defer_accept(listener, 1);
+    if env_or("LB_DEFER_ACCEPT", 1u32) != 0 {
+        net::set_tcp_defer_accept(listener, 1);
+    }
 
     // Connect a persistent control channel to each API (retry until they're up).
     let mut channels = Vec::with_capacity(sockets.len());
     for s in &sockets {
         loop {
-            match net::uds_seqpacket_connect(s) {
+            match control_connect(s) {
                 Ok(fd) => {
                     eprintln!("[lb] connected to {}", s.display());
                     channels.push(fd);
@@ -71,8 +75,12 @@ fn main() {
                 net::Io::Err(_) | net::Io::Eof => break,
             };
             accepted += 1;
-            net::set_tcp_nodelay(client);
-            net::set_quickack(client);
+            if set_nodelay {
+                net::set_tcp_nodelay(client);
+            }
+            if set_quickack {
+                net::set_quickack(client);
+            }
 
             let first = rr;
             rr = (rr + 1) % n;
@@ -105,6 +113,14 @@ fn wait_read(fd: RawFd) {
     };
     unsafe {
         libc::poll(&mut pfd, 1, -1);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn control_connect(path: &std::path::Path) -> std::io::Result<RawFd> {
+    match env::var("CONTROL_SOCKET_KIND").as_deref() {
+        Ok("stream") => net::uds_connect(path),
+        _ => net::uds_seqpacket_connect(path),
     }
 }
 

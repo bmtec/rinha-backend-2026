@@ -39,11 +39,17 @@ impl Default for AlignedVec {
 
 /// Quantizes a 16-float vector to 16-bit fixed point (×`SCALE`, rounded).
 #[inline]
+pub fn quantize_one(v: f32) -> i16 {
+    let s = (v * SCALE).round();
+    s.clamp(-32767.0, 32767.0) as i16
+}
+
+/// Quantizes a 16-float vector to 16-bit fixed point (×`SCALE`, rounded).
+#[inline]
 pub fn quantize_i16(v: &[f32; 16]) -> [i16; 16] {
     let mut q = [0i16; 16];
     for i in 0..16 {
-        let s = (v[i] * SCALE).round();
-        q[i] = s.clamp(-32767.0, 32767.0) as i16;
+        q[i] = quantize_one(v[i]);
     }
     q
 }
@@ -112,6 +118,7 @@ mod imp {
     ) {
         const PREFETCH_AHEAD: usize = 4;
         let qv = _mm256_loadu_si256(query.as_ptr() as *const __m256i);
+        let aligned_vectors = (vectors.as_ptr() as usize) & 31 == 0;
         for i in 0..vectors.len() {
             if i + PREFETCH_AHEAD < vectors.len() {
                 _mm_prefetch(
@@ -119,7 +126,12 @@ mod imp {
                     _MM_HINT_T0,
                 );
             }
-            let bv = _mm256_loadu_si256(vectors[i].as_ptr() as *const __m256i);
+            let ptr = vectors[i].as_ptr() as *const __m256i;
+            let bv = if aligned_vectors {
+                _mm256_load_si256(ptr)
+            } else {
+                _mm256_loadu_si256(ptr)
+            };
             let d = _mm256_sub_epi16(qv, bv);
             out[i] = hsum_madd_i64(d);
         }

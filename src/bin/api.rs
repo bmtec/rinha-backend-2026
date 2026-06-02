@@ -28,7 +28,7 @@ mod linux {
     use memchr::memmem;
     use memmap2::Mmap;
 
-    use rinha::index::IvfIndex;
+    use rinha::index::{IvfIndex, QueryOptions, RepairMode};
     use rinha::net::{self, Epoll, Io, RecvFd};
     use rinha::{parser, responses, vectorizer};
 
@@ -124,12 +124,14 @@ mod linux {
         let index_path =
             std::env::var("INDEX_PATH").unwrap_or_else(|_| "/data/index.bin".to_string());
         let nprobe: usize = env_or("NPROBE", 10);
+        let query_options = query_options(nprobe);
 
         // mmap + mlock the index so queries never page-fault. One mapping is
         // shared by all worker threads (read-only).
         let file = std::fs::File::open(&index_path)
             .unwrap_or_else(|e| panic!("open index {index_path}: {e}"));
         let mmap = unsafe { Mmap::map(&file).expect("mmap index") };
+        configure_mmap(&mmap);
         net::mlock(mmap.as_ptr(), mmap.len());
         let mmap: &'static Mmap = Box::leak(Box::new(mmap));
         let data: &'static [u8] = &mmap[..];
@@ -137,19 +139,19 @@ mod linux {
             Box::leak(Box::new(IvfIndex::from_bytes(data).expect("invalid index")));
 
         // Warm the query path (page-ins, branch predictor) before serving.
-        warm_up(index, nprobe);
+        warm_up(index, query_options);
 
         if let Some(socket) = api_socket {
             eprintln!(
-                "[api] index {} vectors, nprobe={nprobe}, socket={socket}",
+                "[api] index {} vectors, query={query_options:?}, socket={socket}",
                 index.num_vectors
             );
-            fd_worker(PathBuf::from(socket), backlog, index, nprobe);
+            fd_worker(PathBuf::from(socket), backlog, index, query_options);
             return;
         }
 
         eprintln!(
-            "[api] index {} vectors, nprobe={nprobe}, standalone port={port}, workers={workers}",
+            "[api] index {} vectors, query={query_options:?}, standalone port={port}, workers={workers}",
             index.num_vectors
         );
 
@@ -157,7 +159,7 @@ mod linux {
         for w in 0..workers {
             let h = std::thread::Builder::new()
                 .name(format!("worker-{w}"))
-                .spawn(move || tcp_worker(w, port, backlog, index, nprobe))
+                .spawn(move || tcp_worker(w, port, backlog, index, query_options))
                 .expect("spawn worker");
             handles.push(h);
         }
@@ -168,8 +170,13 @@ mod linux {
 
     /// Official topology worker: receives client fds from the LB over a Unix
     /// socket, then owns those TCP sockets directly.
-    fn fd_worker(socket_path: PathBuf, backlog: i32, index: &'static IvfIndex, nprobe: usize) {
-        let listener = net::uds_seqpacket_listener(&socket_path, backlog)
+    fn fd_worker(
+        socket_path: PathBuf,
+        backlog: i32,
+        index: &'static IvfIndex,
+        query_options: QueryOptions,
+    ) {
+        let listener = control_listener(&socket_path, backlog)
             .unwrap_or_else(|e| panic!("[api] bind {}: {e}", socket_path.display()));
         net::set_nonblocking(listener).ok();
 
@@ -182,6 +189,7 @@ mod linux {
         let mut conns = ConnTable::new(env_or("CONN_POOL_CAP", 512usize));
         let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; MAX_EVENTS];
         let wait = wait_tuning();
+        let set_recvfd_nonblocking = env_or("API_SET_RECVFD_NONBLOCK", 1u32) != 0;
 
         loop {
             let n = match wait_events(&ep, &mut events, wait) {
@@ -208,7 +216,14 @@ mod linux {
 
                 let fd = ev.u64 as RawFd;
                 if let Some(control_pos) = controls.iter().position(|&c| c == fd) {
-                    if !drain_control(fd, &ep, &mut conns, index, nprobe) {
+                    if !drain_control(
+                        fd,
+                        &ep,
+                        &mut conns,
+                        index,
+                        query_options,
+                        set_recvfd_nonblocking,
+                    ) {
                         ep.del(fd);
                         controls.swap_remove(control_pos);
                         net::close_fd(fd);
@@ -217,7 +232,7 @@ mod linux {
                 }
 
                 let keep = match conns.get_mut(fd) {
-                    Some(c) => handle_client(fd, c, index, nprobe),
+                    Some(c) => handle_client(fd, c, index, query_options),
                     None => false,
                 };
                 if !keep {
@@ -234,18 +249,21 @@ mod linux {
         ep: &Epoll,
         conns: &mut ConnTable,
         index: &IvfIndex,
-        nprobe: usize,
+        query_options: QueryOptions,
+        set_recvfd_nonblocking: bool,
     ) -> bool {
         loop {
             match net::recv_fd(channel) {
                 RecvFd::Fd(fd) => {
-                    net::set_nonblocking(fd).ok();
+                    if set_recvfd_nonblocking {
+                        net::set_nonblocking(fd).ok();
+                    }
                     if ep.add(fd, fd as u64).is_err() || !conns.insert(fd) {
                         net::close_fd(fd);
                         continue;
                     }
                     let keep = match conns.get_mut(fd) {
-                        Some(c) => handle_client(fd, c, index, nprobe),
+                        Some(c) => handle_client(fd, c, index, query_options),
                         None => false,
                     };
                     if !keep {
@@ -262,7 +280,13 @@ mod linux {
 
     /// Standalone benchmark worker: its own SO_REUSEPORT listener + epoll
     /// reactor. This mode is intentionally not used by the official compose.
-    fn tcp_worker(w: usize, port: u16, backlog: i32, index: &'static IvfIndex, nprobe: usize) {
+    fn tcp_worker(
+        w: usize,
+        port: u16,
+        backlog: i32,
+        index: &'static IvfIndex,
+        query_options: QueryOptions,
+    ) {
         let listener = net::tcp_listener_opts(port, backlog, true)
             .unwrap_or_else(|e| panic!("[api-w{w}] bind :{port}: {e}"));
         net::set_nonblocking(listener).ok();
@@ -301,7 +325,7 @@ mod linux {
 
                 let fd = ev.u64 as RawFd;
                 let keep = match conns.get_mut(fd) {
-                    Some(c) => handle_client(fd, c, index, nprobe),
+                    Some(c) => handle_client(fd, c, index, query_options),
                     None => false,
                 };
                 if !keep {
@@ -315,7 +339,12 @@ mod linux {
 
     /// Drains readable bytes and answers every complete pipelined request.
     /// Returns false when the connection should be closed.
-    fn handle_client(fd: RawFd, conn: &mut Conn, index: &IvfIndex, nprobe: usize) -> bool {
+    fn handle_client(
+        fd: RawFd,
+        conn: &mut Conn,
+        index: &IvfIndex,
+        query_options: QueryOptions,
+    ) -> bool {
         loop {
             if conn.len == CONN_BUF_CAP {
                 return false;
@@ -358,7 +387,7 @@ mod linux {
                     body_len,
                 } => {
                     let body = &conn.buf[start + body_off..start + body_off + body_len];
-                    let fc = score(body, index, nprobe);
+                    let fc = score(body, index, query_options);
                     if net::write_all(fd, responses::full_response(fc)).is_err() {
                         return false;
                     }
@@ -378,14 +407,17 @@ mod linux {
     }
 
     #[inline]
-    fn score(body: &[u8], index: &IvfIndex, nprobe: usize) -> usize {
+    fn score(body: &[u8], index: &IvfIndex, query_options: QueryOptions) -> usize {
         match parser::parse(body) {
-            Some(p) => index.query(&vectorizer::vectorize(&p), nprobe).0 as usize,
+            Some(p) => {
+                let (v, q) = vectorizer::vectorize_quantized(&p);
+                index.query_quantized_with_options(&v, &q, query_options).0 as usize
+            }
             None => 0,
         }
     }
 
-    fn warm_up(index: &IvfIndex, nprobe: usize) {
+    fn warm_up(index: &IvfIndex, query_options: QueryOptions) {
         let count: usize = env_or("API_WARMUP_QUERIES", 2048);
         let mut acc = 0u8;
         for i in 0..count {
@@ -397,9 +429,24 @@ mod linux {
                 v[5] = -1.0;
                 v[6] = -1.0;
             }
-            acc ^= index.query(&v, nprobe).0;
+            acc ^= index.query_with_options(&v, query_options).0;
         }
         std::hint::black_box(acc);
+    }
+
+    fn query_options(nprobe: usize) -> QueryOptions {
+        let repair_mode = match std::env::var("REPAIR_MODE").as_deref() {
+            Ok("ambiguous") | Ok("centroid") => RepairMode::AmbiguousCentroid,
+            Ok("bbox") => RepairMode::Bbox,
+            _ => RepairMode::Pattern,
+        };
+        QueryOptions {
+            nprobe,
+            repair_mode,
+            repair_min: env_or("REPAIR_MIN", 1u8),
+            repair_max: env_or("REPAIR_MAX", 4u8),
+            repair_candidates: env_or("REPAIR_CANDIDATES", 64usize),
+        }
     }
 
     fn wait_tuning() -> WaitTuning {
@@ -414,6 +461,25 @@ mod linux {
         let budget: u16 = env_or("EPOLL_BUSY_POLL_BUDGET", 8u16);
         let prefer: u32 = env_or("EPOLL_PREFER_BUSY_POLL", 0u32);
         ep.set_busy_poll(usecs, budget, prefer != 0);
+    }
+
+    fn configure_mmap(mmap: &Mmap) {
+        match std::env::var("INDEX_MADVISE").as_deref() {
+            Ok("willneed") => net::madvise_willneed(mmap.as_ptr(), mmap.len()),
+            Ok("huge") => net::madvise_hugepage(mmap.as_ptr(), mmap.len()),
+            Ok("both") => {
+                net::madvise_hugepage(mmap.as_ptr(), mmap.len());
+                net::madvise_willneed(mmap.as_ptr(), mmap.len());
+            }
+            _ => {}
+        }
+    }
+
+    fn control_listener(path: &std::path::Path, backlog: i32) -> std::io::Result<RawFd> {
+        match std::env::var("CONTROL_SOCKET_KIND").as_deref() {
+            Ok("stream") => net::uds_listener(path, backlog),
+            _ => net::uds_seqpacket_listener(path, backlog),
+        }
     }
 
     fn wait_events(

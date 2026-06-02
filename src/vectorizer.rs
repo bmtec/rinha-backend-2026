@@ -1,6 +1,7 @@
 //! Transforms a parsed [`TransactionPayload`] into a 16-float padded vector
 //! (14 real dimensions + 2 zero padding for AVX2 alignment).
 
+use crate::distance::quantize_one;
 use crate::parser::TransactionPayload;
 use crate::{
     mcc_risk, AMOUNT_VS_AVG_RATIO, MAX_AMOUNT, MAX_INSTALLMENTS, MAX_KM, MAX_MERCHANT_AVG_AMOUNT,
@@ -10,6 +11,12 @@ use crate::{
 #[inline]
 fn clamp(x: f32) -> f32 {
     x.max(0.0).min(1.0)
+}
+
+#[inline]
+fn set_dim(v: &mut [f32; 16], q: &mut [i16; 16], idx: usize, value: f32) {
+    v[idx] = value;
+    q[idx] = quantize_one(value);
 }
 
 /// Parses two ASCII digits at `b[i..i+2]` into an integer.
@@ -105,54 +112,83 @@ fn minutes_diff(current: ParsedTs, last: ParsedTs) -> i64 {
 
 /// Computes the 14-dimensional feature vector (padded to 16).
 pub fn vectorize(p: &TransactionPayload) -> [f32; 16] {
+    vectorize_quantized(p).0
+}
+
+/// Computes the feature vector and its quantized representation in one pass.
+pub fn vectorize_quantized(p: &TransactionPayload) -> ([f32; 16], [i16; 16]) {
     let mut v = [0.0f32; 16];
+    let mut q = [0i16; 16];
     let requested = ParsedTs::from_iso(&p.requested_at);
 
-    v[0] = clamp(p.amount / MAX_AMOUNT);
-    v[1] = clamp(p.installments as f32 / MAX_INSTALLMENTS);
+    set_dim(&mut v, &mut q, 0, clamp(p.amount / MAX_AMOUNT));
+    set_dim(
+        &mut v,
+        &mut q,
+        1,
+        clamp(p.installments as f32 / MAX_INSTALLMENTS),
+    );
 
     // amount vs customer average; guard against a zero average.
-    v[2] = if p.avg_amount > 0.0 {
+    let amount_vs_avg = if p.avg_amount > 0.0 {
         clamp((p.amount / p.avg_amount) / AMOUNT_VS_AVG_RATIO)
     } else {
         0.0
     };
+    set_dim(&mut v, &mut q, 2, amount_vs_avg);
 
-    v[3] = requested.hour as f32 / 23.0;
-    v[4] = requested.weekday_mon0() as f32 / 6.0;
+    set_dim(&mut v, &mut q, 3, requested.hour as f32 / 23.0);
+    set_dim(&mut v, &mut q, 4, requested.weekday_mon0() as f32 / 6.0);
 
     // Dimensions 5 & 6 use the -1 sentinel when there is no last transaction.
     if p.has_last_transaction {
         if let Some(last_ts) = p.last_tx_timestamp.as_ref() {
             let diff = minutes_diff(requested, ParsedTs::from_iso(last_ts)) as f32;
-            v[5] = clamp(diff / MAX_MINUTES);
+            set_dim(&mut v, &mut q, 5, clamp(diff / MAX_MINUTES));
         } else {
-            v[5] = -1.0;
+            set_dim(&mut v, &mut q, 5, -1.0);
         }
-        v[6] = match p.km_from_current {
+        let km_current = match p.km_from_current {
             Some(km) => clamp(km / MAX_KM),
             None => -1.0,
         };
+        set_dim(&mut v, &mut q, 6, km_current);
     } else {
-        v[5] = -1.0;
-        v[6] = -1.0;
+        set_dim(&mut v, &mut q, 5, -1.0);
+        set_dim(&mut v, &mut q, 6, -1.0);
     }
 
-    v[7] = clamp(p.km_from_home / MAX_KM);
-    v[8] = clamp(p.tx_count_24h as f32 / MAX_TX_COUNT_24H);
-    v[9] = if p.is_online { 1.0 } else { 0.0 };
-    v[10] = if p.card_present { 1.0 } else { 0.0 };
-    v[11] = if p.is_unknown_merchant() { 1.0 } else { 0.0 };
-    v[12] = mcc_risk(&p.mcc);
-    v[13] = clamp(p.merchant_avg_amount / MAX_MERCHANT_AVG_AMOUNT);
+    set_dim(&mut v, &mut q, 7, clamp(p.km_from_home / MAX_KM));
+    set_dim(
+        &mut v,
+        &mut q,
+        8,
+        clamp(p.tx_count_24h as f32 / MAX_TX_COUNT_24H),
+    );
+    set_dim(&mut v, &mut q, 9, if p.is_online { 1.0 } else { 0.0 });
+    set_dim(&mut v, &mut q, 10, if p.card_present { 1.0 } else { 0.0 });
+    set_dim(
+        &mut v,
+        &mut q,
+        11,
+        if p.is_unknown_merchant() { 1.0 } else { 0.0 },
+    );
+    set_dim(&mut v, &mut q, 12, mcc_risk(&p.mcc));
+    set_dim(
+        &mut v,
+        &mut q,
+        13,
+        clamp(p.merchant_avg_amount / MAX_MERCHANT_AVG_AMOUNT),
+    );
 
     // v[14], v[15] remain 0.0 (padding).
-    v
+    (v, q)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distance::quantize_i16;
     use crate::parser::parse;
 
     #[test]
@@ -199,6 +235,14 @@ mod tests {
         assert!((v[12] - 0.15).abs() < 1e-6); // mcc 5411
         assert_eq!(v[14], 0.0);
         assert_eq!(v[15], 0.0);
+    }
+
+    #[test]
+    fn quantized_output_matches_standalone_quantization() {
+        const WITH_LAST: &[u8] = br#"{"id":"t","transaction":{"amount":384.88,"installments":3,"requested_at":"2026-03-11T20:23:35Z"},"customer":{"avg_amount":769.76,"tx_count_24h":3,"known_merchants":["MERC-009","MERC-001"]},"merchant":{"id":"MERC-001","mcc":"5912","avg_amount":298.95},"terminal":{"is_online":false,"card_present":true,"km_from_home":13.7090520965},"last_transaction":{"timestamp":"2026-03-11T14:58:35Z","km_from_current":18.8626479774}}"#;
+        let p = parse(WITH_LAST).unwrap();
+        let (v, q) = vectorize_quantized(&p);
+        assert_eq!(q, quantize_i16(&v));
     }
 
     #[test]

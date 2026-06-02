@@ -424,6 +424,20 @@ pub fn mlock(ptr: *const u8, len: usize) {
     }
 }
 
+/// Hints the kernel that the mmap'd index should be backed eagerly.
+pub fn madvise_willneed(ptr: *const u8, len: usize) {
+    unsafe {
+        libc::madvise(ptr as *mut c_void, len, libc::MADV_WILLNEED);
+    }
+}
+
+/// Hints the kernel that transparent huge pages may help the mmap'd index.
+pub fn madvise_hugepage(ptr: *const u8, len: usize) {
+    unsafe {
+        libc::madvise(ptr as *mut c_void, len, libc::MADV_HUGEPAGE);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // epoll
 // ---------------------------------------------------------------------------
