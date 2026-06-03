@@ -615,10 +615,64 @@ pub fn align_up(off: usize, align: usize) -> usize {
 
 #[inline]
 fn fill_best_centroids(cdist: &[i64], cap: usize, best: &mut [(i64, u32); MAX_NPROBE]) {
-    let mut len = 0usize;
-    for (i, &dist) in cdist.iter().enumerate() {
-        insert_sorted(best, &mut len, cap, dist, i as u32);
+    let cap = cap.min(MAX_NPROBE).min(cdist.len());
+    if cap == 0 {
+        return;
     }
+
+    let mut worst_idx = 0usize;
+    let mut worst_dist = i64::MIN;
+
+    for (i, &dist) in cdist.iter().take(cap).enumerate() {
+        let payload = i as u32;
+        best[i] = (dist, payload);
+        if dist >= worst_dist {
+            worst_idx = i;
+            worst_dist = dist;
+        }
+    }
+
+    for (i, &dist) in cdist.iter().enumerate().skip(cap) {
+        if dist < worst_dist {
+            best[worst_idx] = (dist, i as u32);
+            (worst_idx, worst_dist) = worst_centroid(best, cap);
+        }
+    }
+
+    sort_centroids(best, cap);
+}
+
+#[inline]
+fn worst_centroid(best: &[(i64, u32); MAX_NPROBE], cap: usize) -> (usize, i64) {
+    let mut worst_idx = 0usize;
+    let mut worst_dist = best[0].0;
+    let mut worst_payload = best[0].1;
+    for (i, &(dist, payload)) in best.iter().take(cap).enumerate().skip(1) {
+        if dist > worst_dist || (dist == worst_dist && payload > worst_payload) {
+            worst_idx = i;
+            worst_dist = dist;
+            worst_payload = payload;
+        }
+    }
+    (worst_idx, worst_dist)
+}
+
+#[inline]
+fn sort_centroids(best: &mut [(i64, u32); MAX_NPROBE], cap: usize) {
+    for i in 1..cap {
+        let item = best[i];
+        let mut j = i;
+        while j > 0 && centroid_less(item, best[j - 1]) {
+            best[j] = best[j - 1];
+            j -= 1;
+        }
+        best[j] = item;
+    }
+}
+
+#[inline]
+fn centroid_less(a: (i64, u32), b: (i64, u32)) -> bool {
+    a.0 < b.0 || (a.0 == b.0 && a.1 < b.1)
 }
 
 /// Inserts `(dist, payload)` into an ascending-by-distance array capped at
