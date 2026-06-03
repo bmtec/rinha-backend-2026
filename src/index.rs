@@ -30,9 +30,9 @@ const SECTION_ALIGN: usize = 32;
 /// expands to at most 48 cells, so 64 leaves room for manual tuning without
 /// paying for a cold 256-entry stack buffer on every request.
 const MAX_NPROBE: usize = 64;
-/// Largest centroid count we will honour. Experiments may build the index with
-/// more than the production 2048 centroids.
-const MAX_CENTROIDS: usize = 4096;
+/// Largest centroid count we will honour. The baked index is built with 2048
+/// centroids.
+const MAX_CENTROIDS: usize = 2048;
 /// How many cell vectors to score per batch. Scans are block-oriented, so this
 /// only needs to match `BLOCK_SIZE`; a larger scratch array is just stack churn.
 const SCAN_CHUNK: usize = BLOCK_SIZE;
