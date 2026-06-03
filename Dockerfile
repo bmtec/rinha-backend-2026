@@ -14,10 +14,10 @@ COPY src ./src
 RUN cargo build --release --bins
 
 #######################################################################
-# Stage 2 — build the IVF index (int16, 2048 centroids).
+# Stage 2 — build the IVF index (int16, 4096 centroids).
 #######################################################################
 FROM --platform=linux/amd64 build AS index
-ARG CENTROIDS=2048
+ARG CENTROIDS=4096
 COPY resources/references.json.gz /resources/references.json.gz
 RUN mkdir -p /output \
  && CENTROIDS=${CENTROIDS} /app/target/release/builder /resources/references.json.gz /output/index.bin \
@@ -33,5 +33,5 @@ COPY --from=build /app/target/release/api /usr/local/bin/api
 COPY --from=build /app/target/release/lb  /usr/local/bin/lb
 COPY --from=index /output/index.bin /data/index.bin
 RUN mkdir -p /sockets
-ENV INDEX_PATH=/data/index.bin NPROBE=10
+ENV INDEX_PATH=/data/index.bin NPROBE=10 REPAIR_MODE=bbox REPAIR_CANDIDATES=128
 # No ENTRYPOINT — docker-compose selects `api` or `lb` per service.
