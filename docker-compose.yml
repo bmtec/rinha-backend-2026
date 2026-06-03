@@ -1,4 +1,6 @@
 # Rinha de Backend 2026 — documented topology (1.0 CPU / 350 MB total).
+# Memory envelope: services declare 346 MB, plus the 4 MB tmpfs Unix-socket
+# volume below, so even counting IPC tmpfs explicitly the total stays 350 MB.
 #
 # Public path:
 #   client -> Rust LB (:9999) -> fd hand-off over Unix socket -> api1/api2
@@ -64,7 +66,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "171MB" }
+        limits: { cpus: "0.495", memory: "169MB" }
 
   api2:
     image: ghcr.io/bmtec/rinha-backend-2026:latest
@@ -94,7 +96,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "171MB" }
+        limits: { cpus: "0.495", memory: "169MB" }
 
 networks:
   rinha:
