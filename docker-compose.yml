@@ -1,5 +1,7 @@
 # Rinha de Backend 2026 — submission branch.
 # Only public images are referenced here; no source code or build context.
+# Memory envelope: services declare 346 MB, plus the 4 MB tmpfs Unix-socket
+# volume below, so even counting IPC tmpfs explicitly the total stays 350 MB.
 
 services:
   lb:
@@ -49,7 +51,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "171MB" }
+        limits: { cpus: "0.495", memory: "169MB" }
 
   api2:
     image: ghcr.io/bmtec/rinha-backend-2026:latest
@@ -74,7 +76,7 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "171MB" }
+        limits: { cpus: "0.495", memory: "169MB" }
 
 networks:
   rinha:
