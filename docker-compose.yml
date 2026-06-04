@@ -28,7 +28,7 @@ services:
       driver: "none"
     deploy:
       resources:
-        limits: { cpus: "0.01", memory: "8MB" }
+        limits: { cpus: "0.10", memory: "8MB" }
 
   api1:
     image: ghcr.io/bmtec/rinha-backend-2026:0e80820d6664ca744e45f8896650faf44caccb3c
@@ -55,7 +55,7 @@ services:
       driver: "none"
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "169MB" }
+        limits: { cpus: "0.45", memory: "169MB" }
 
   api2:
     image: ghcr.io/bmtec/rinha-backend-2026:0e80820d6664ca744e45f8896650faf44caccb3c
@@ -82,7 +82,7 @@ services:
       driver: "none"
     deploy:
       resources:
-        limits: { cpus: "0.495", memory: "169MB" }
+        limits: { cpus: "0.45", memory: "169MB" }
 
 networks:
   rinha:
